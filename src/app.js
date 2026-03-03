@@ -4,6 +4,9 @@ const crypto = require('crypto');
 const { isValidGithubSignature } = require('./webhook/verifySignature');
 const { handleGithubEvent } = require('./webhook/handleGithubEvent');
 const { getSecret } = require('./config/secrets');
+const { createRateLimiter } = require('./security/rateLimit');
+const { logAdminAudit, listAdminAuditLogs } = require('./security/audit');
+const { recordRequest, getObservabilitySnapshot } = require('./observability/metrics');
 const {
   getSummary,
   getProcessedEvent,
@@ -16,11 +19,41 @@ const { runRetentionCleanup } = require('./retention/runner');
 const app = express();
 const publicDir = path.join(__dirname, '..', 'public');
 
+const adminRateLimiter = createRateLimiter({
+  scope: 'admin',
+  windowMs: Number(process.env.ADMIN_RATE_LIMIT_WINDOW_MS || 60 * 1000),
+  maxRequests: Number(process.env.ADMIN_RATE_LIMIT_MAX || 120)
+});
+
+const webhookRateLimiter = createRateLimiter({
+  scope: 'webhook',
+  windowMs: Number(process.env.WEBHOOK_RATE_LIMIT_WINDOW_MS || 60 * 1000),
+  maxRequests: Number(process.env.WEBHOOK_RATE_LIMIT_MAX || 300)
+});
+
 app.use(express.json({
   verify: (req, res, buffer) => {
     req.rawBody = buffer;
   }
 }));
+
+app.use((req, res, next) => {
+  const started = Date.now();
+
+  res.on('finish', () => {
+    recordRequest({
+      method: req.method,
+      path: req.originalUrl,
+      statusCode: res.statusCode,
+      durationMs: Date.now() - started
+    });
+  });
+
+  next();
+});
+
+app.use('/admin', adminRateLimiter);
+app.use('/webhook', webhookRateLimiter);
 app.use('/admin', express.static(path.join(publicDir, 'admin')));
 
 function tokenDigestHex(value) {
@@ -49,6 +82,12 @@ function requireAdminToken(req, res, next) {
   const configuredHash = getSecret('ADMIN_API_TOKEN_HASH').toLowerCase();
 
   if (!configuredHash) {
+    logAdminAudit(req, {
+      action: 'admin_auth',
+      outcome: 'misconfigured',
+      details: { reason: 'missing_admin_api_token_hash' }
+    });
+
     return res.status(500).json({
       error: {
         code: 'ADMIN_AUTH_NOT_CONFIGURED',
@@ -59,6 +98,12 @@ function requireAdminToken(req, res, next) {
   }
 
   if (!/^[a-f0-9]{64}$/.test(configuredHash)) {
+    logAdminAudit(req, {
+      action: 'admin_auth',
+      outcome: 'misconfigured',
+      details: { reason: 'invalid_admin_api_token_hash_format' }
+    });
+
     return res.status(500).json({
       error: {
         code: 'ADMIN_AUTH_MISCONFIGURED',
@@ -71,6 +116,12 @@ function requireAdminToken(req, res, next) {
   const providedToken = req.header('x-admin-token') || '';
 
   if (!providedToken) {
+    logAdminAudit(req, {
+      action: 'admin_auth',
+      outcome: 'denied',
+      details: { reason: 'missing_token' }
+    });
+
     return res.status(401).json({
       error: {
         code: 'ADMIN_UNAUTHORIZED',
@@ -84,6 +135,12 @@ function requireAdminToken(req, res, next) {
   const valid = timingSafeHexEqual(providedHash, configuredHash);
 
   if (!valid) {
+    logAdminAudit(req, {
+      action: 'admin_auth',
+      outcome: 'denied',
+      details: { reason: 'invalid_token' }
+    });
+
     return res.status(401).json({
       error: {
         code: 'ADMIN_UNAUTHORIZED',
@@ -92,6 +149,11 @@ function requireAdminToken(req, res, next) {
       }
     });
   }
+
+  logAdminAudit(req, {
+    action: 'admin_auth',
+    outcome: 'allowed'
+  });
 
   return next();
 }
@@ -140,10 +202,32 @@ app.get('/webhook/dead-letters', async (req, res) => {
 });
 
 app.post('/admin/retention/run', requireAdminToken, async (req, res) => {
+  logAdminAudit(req, {
+    action: 'admin_retention_run',
+    outcome: 'attempt'
+  });
+
   try {
     const result = await runRetentionCleanup();
+
+    logAdminAudit(req, {
+      action: 'admin_retention_run',
+      outcome: 'success',
+      details: {
+        deleted: result.deleted || {}
+      }
+    });
+
     return res.json(result);
   } catch (error) {
+    logAdminAudit(req, {
+      action: 'admin_retention_run',
+      outcome: 'failure',
+      details: {
+        message: error.message
+      }
+    });
+
     return res.status(500).json({
       error: {
         code: 'RETENTION_CLEANUP_FAILED',
@@ -183,6 +267,56 @@ app.get('/admin/recent-webhooks', requireAdminToken, async (req, res) => {
       error: {
         code: 'ADMIN_RECENT_WEBHOOKS_FAILED',
         message: 'Failed to load recent webhook events',
+        retryable: true,
+        details: error.message
+      }
+    });
+  }
+});
+
+app.get('/admin/observability', requireAdminToken, async (req, res) => {
+  try {
+    const metrics = getObservabilitySnapshot();
+    return res.json(metrics);
+  } catch (error) {
+    return res.status(500).json({
+      error: {
+        code: 'ADMIN_OBSERVABILITY_FAILED',
+        message: 'Failed to load observability metrics',
+        retryable: true,
+        details: error.message
+      }
+    });
+  }
+});
+
+app.get('/admin/auth/check', requireAdminToken, async (req, res) => {
+  logAdminAudit(req, {
+    action: 'admin_auth_check',
+    outcome: 'success'
+  });
+
+  return res.json({
+    ok: true,
+    checked_at: new Date().toISOString()
+  });
+});
+
+app.get('/admin/audit-logs', requireAdminToken, async (req, res) => {
+  try {
+    const items = await listAdminAuditLogs(req.query.limit || 50, {
+      action: req.query.action,
+      outcome: req.query.outcome
+    });
+    return res.json({
+      count: items.length,
+      items
+    });
+  } catch (error) {
+    return res.status(500).json({
+      error: {
+        code: 'ADMIN_AUDIT_LOGS_FAILED',
+        message: 'Failed to load admin audit logs',
         retryable: true,
         details: error.message
       }

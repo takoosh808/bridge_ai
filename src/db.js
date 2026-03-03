@@ -82,6 +82,19 @@ async function initDatabase() {
       created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
     )
   `);
+
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS admin_audit_logs (
+      id BIGSERIAL PRIMARY KEY,
+      action TEXT NOT NULL,
+      outcome TEXT NOT NULL,
+      path TEXT NOT NULL,
+      method TEXT NOT NULL,
+      client_ip TEXT NOT NULL,
+      details JSONB,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    )
+  `);
 }
 
 async function query(text, params = []) {

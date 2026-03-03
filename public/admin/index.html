@@ -78,9 +78,11 @@
 
     <div style="margin: 14px 0">
       <input id="tokenInput" type="password" placeholder="Admin token" style="padding: 8px; border: 1px solid #ccc; border-radius: 6px; min-width: 240px" />
+      <label class="muted" style="margin-left: 6px; font-size: 12px"><input id="rememberTokenCheckbox" type="checkbox" /> Remember in this tab</label>
       <button id="authBtn">Check Auth</button>
       <button id="refreshBtn">Refresh</button>
       <button id="retentionBtn">Run retention cleanup</button>
+      <button id="signOutBtn">Sign Out</button>
       <span id="status" class="muted"></span>
     </div>
 
@@ -140,6 +142,64 @@
       </table>
     </div>
 
+    <div class="card" style="margin-top: 16px">
+      <div class="label">Observability</div>
+      <div id="observabilitySummary" class="muted" style="margin-bottom: 10px">-</div>
+      <table>
+        <thead>
+          <tr>
+            <th>When</th>
+            <th>Method</th>
+            <th>Path</th>
+            <th>Status</th>
+            <th>Latency (ms)</th>
+          </tr>
+        </thead>
+        <tbody id="observabilityTableBody"></tbody>
+      </table>
+    </div>
+
+    <div class="card" style="margin-top: 16px">
+      <div class="label">Admin Audit Logs</div>
+      <div style="margin-bottom: 10px" class="muted">
+        <label style="margin-right: 10px">
+          Action:
+          <select id="auditActionFilter">
+            <option value="">All</option>
+            <option value="admin_auth">admin_auth</option>
+            <option value="admin_auth_check">admin_auth_check</option>
+            <option value="admin_retention_run">admin_retention_run</option>
+          </select>
+        </label>
+        <label>
+          Outcome:
+          <select id="auditOutcomeFilter">
+            <option value="">All</option>
+            <option value="allowed">allowed</option>
+            <option value="denied">denied</option>
+            <option value="success">success</option>
+            <option value="failure">failure</option>
+            <option value="attempt">attempt</option>
+            <option value="misconfigured">misconfigured</option>
+          </select>
+        </label>
+        <button id="auditClearFiltersBtn" style="margin-left: 10px">Clear filters</button>
+      </div>
+      <table>
+        <thead>
+          <tr>
+            <th>When</th>
+            <th>Action</th>
+            <th>Outcome</th>
+            <th>Method</th>
+            <th>Path</th>
+            <th>IP</th>
+          </tr>
+        </thead>
+        <tbody id="auditLogsTableBody"></tbody>
+      </table>
+    </div>
+
     <script>
       const summariesCount = document.getElementById('summariesCount');
       const webhooksCount = document.getElementById('webhooksCount');
@@ -151,8 +211,17 @@
       const retentionBtn = document.getElementById('retentionBtn');
       const statusEl = document.getElementById('status');
       const tokenInput = document.getElementById('tokenInput');
+      const rememberTokenCheckbox = document.getElementById('rememberTokenCheckbox');
       const authBtn = document.getElementById('authBtn');
+      const signOutBtn = document.getElementById('signOutBtn');
       const authState = document.getElementById('authState');
+      const observabilitySummary = document.getElementById('observabilitySummary');
+      const observabilityTableBody = document.getElementById('observabilityTableBody');
+      const auditLogsTableBody = document.getElementById('auditLogsTableBody');
+      const auditActionFilter = document.getElementById('auditActionFilter');
+      const auditOutcomeFilter = document.getElementById('auditOutcomeFilter');
+      const auditClearFiltersBtn = document.getElementById('auditClearFiltersBtn');
+      const sessionTokenKey = 'bridge_admin_token';
 
       function getAuthHeaders() {
         const token = tokenInput.value;
@@ -161,6 +230,37 @@
         }
 
         return { 'x-admin-token': token };
+      }
+
+      function loadSessionToken() {
+        const token = sessionStorage.getItem(sessionTokenKey) || '';
+        if (token) {
+          tokenInput.value = token;
+          rememberTokenCheckbox.checked = true;
+        }
+      }
+
+      function syncSessionToken() {
+        if (rememberTokenCheckbox.checked && tokenInput.value) {
+          sessionStorage.setItem(sessionTokenKey, tokenInput.value);
+          return;
+        }
+
+        sessionStorage.removeItem(sessionTokenKey);
+      }
+
+      function clearAuthState() {
+        tokenInput.value = '';
+        rememberTokenCheckbox.checked = false;
+        sessionStorage.removeItem(sessionTokenKey);
+        authState.textContent = 'Signed out';
+        statusEl.textContent = 'Token cleared for this tab.';
+      }
+
+      function clearAuditFilters() {
+        auditActionFilter.value = '';
+        auditOutcomeFilter.value = '';
+        loadOverview();
       }
 
       async function checkAuth() {
@@ -172,11 +272,12 @@
         }
 
         try {
-          const response = await fetch('/admin/overview', { headers });
+          const response = await fetch('/admin/auth/check', { headers });
 
           if (response.ok) {
             authState.textContent = 'OK';
             statusEl.textContent = 'Token accepted.';
+            syncSessionToken();
             return true;
           }
 
@@ -208,9 +309,20 @@
         statusEl.textContent = 'Loading...';
 
         try {
-          const [overviewRes, recentRes] = await Promise.all([
+          const auditParams = new URLSearchParams({ limit: '10' });
+          if (auditActionFilter.value) {
+            auditParams.set('action', auditActionFilter.value);
+          }
+
+          if (auditOutcomeFilter.value) {
+            auditParams.set('outcome', auditOutcomeFilter.value);
+          }
+
+          const [overviewRes, recentRes, observabilityRes, auditLogsRes] = await Promise.all([
             fetch('/admin/overview', { headers }),
-            fetch('/admin/recent-webhooks?limit=10', { headers })
+            fetch('/admin/recent-webhooks?limit=10', { headers }),
+            fetch('/admin/observability', { headers }),
+            fetch(`/admin/audit-logs?${auditParams.toString()}`, { headers })
           ]);
 
           if (overviewRes.status === 401 || recentRes.status === 401) {
@@ -227,8 +339,18 @@
             throw new Error('Failed to fetch /admin/recent-webhooks');
           }
 
+          if (!observabilityRes.ok) {
+            throw new Error('Failed to fetch /admin/observability');
+          }
+
+          if (!auditLogsRes.ok) {
+            throw new Error('Failed to fetch /admin/audit-logs');
+          }
+
           const overview = await overviewRes.json();
           const recent = await recentRes.json();
+          const observability = await observabilityRes.json();
+          const auditLogs = await auditLogsRes.json();
 
           summariesCount.textContent = overview.totals?.summaries ?? '-';
           webhooksCount.textContent = overview.totals?.processed_webhooks ?? '-';
@@ -265,6 +387,37 @@
               </tr>
             `)
             .join('') || '<tr><td colspan="5" class="muted">No webhook events</td></tr>';
+
+          observabilitySummary.textContent = `Requests=${observability.totals?.requests ?? 0}, Errors=${observability.totals?.errors ?? 0}, ErrorRate=${observability.totals?.error_rate_percent ?? 0}%, AvgLatency=${observability.totals?.avg_latency_ms ?? 0}ms, P95=${observability.totals?.p95_latency_ms ?? 0}ms`;
+
+          const recentRequests = observability.recent_requests || [];
+          observabilityTableBody.innerHTML = recentRequests
+            .slice(-10)
+            .reverse()
+            .map((item) => `
+              <tr>
+                <td>${fmtDate(item.ts)}</td>
+                <td>${item.method || '-'}</td>
+                <td>${item.path || '-'}</td>
+                <td>${item.status_code ?? '-'}</td>
+                <td>${item.duration_ms ?? '-'}</td>
+              </tr>
+            `)
+            .join('') || '<tr><td colspan="5" class="muted">No recent requests</td></tr>';
+
+          const auditItems = auditLogs.items || [];
+          auditLogsTableBody.innerHTML = auditItems
+            .map((item) => `
+              <tr>
+                <td>${fmtDate(item.created_at)}</td>
+                <td>${item.action || '-'}</td>
+                <td>${item.outcome || '-'}</td>
+                <td>${item.method || '-'}</td>
+                <td>${item.path || '-'}</td>
+                <td>${item.client_ip || '-'}</td>
+              </tr>
+            `)
+            .join('') || '<tr><td colspan="6" class="muted">No audit logs</td></tr>';
 
           statusEl.textContent = `Updated ${new Date().toLocaleTimeString()}`;
         } catch (error) {
@@ -307,6 +460,12 @@
       refreshBtn.addEventListener('click', loadOverview);
       retentionBtn.addEventListener('click', runRetention);
       authBtn.addEventListener('click', checkAuth);
+      signOutBtn.addEventListener('click', clearAuthState);
+      auditActionFilter.addEventListener('change', loadOverview);
+      auditOutcomeFilter.addEventListener('change', loadOverview);
+      auditClearFiltersBtn.addEventListener('click', clearAuditFilters);
+      rememberTokenCheckbox.addEventListener('change', syncSessionToken);
+      tokenInput.addEventListener('input', syncSessionToken);
       tokenInput.addEventListener('keydown', (event) => {
         if (event.key === 'Enter') {
           event.preventDefault();
@@ -317,6 +476,8 @@
           });
         }
       });
+
+      loadSessionToken();
     </script>
   </body>
 </html>

@@ -18,6 +18,10 @@
 - `GET /admin/` (dashboard page)
 - `GET /admin/overview` (requires `x-admin-token`)
 - `GET /admin/recent-webhooks?limit=10` (requires `x-admin-token`)
+- `GET /admin/observability` (requires `x-admin-token`)
+- `GET /admin/auth/check` (requires `x-admin-token`)
+- `GET /admin/audit-logs?limit=50` (requires `x-admin-token`)
+	- Supports optional filters: `action` and `outcome`
 - `POST /admin/retention/run`
 
 ## Notes
@@ -43,6 +47,7 @@
 
 ## Admin Auth
 - Admin APIs use header auth: `x-admin-token` (never query params)
+- Dashboard supports optional token remember in current browser tab (`sessionStorage`) and `Sign Out` token clearing
 - Server stores only `ADMIN_API_TOKEN_HASH` (digest hex of token)
 - Modes:
 	- SHA-256 mode (default): set `ADMIN_API_TOKEN_HASH` only
@@ -53,6 +58,28 @@
 	- `$h = New-Object System.Security.Cryptography.HMACSHA256([System.Text.Encoding]::UTF8.GetBytes($pepper))`
 	- `$hash = [System.BitConverter]::ToString($h.ComputeHash([System.Text.Encoding]::UTF8.GetBytes($token))).Replace("-", "").ToLower()`
 	- Set `.env` values: `ADMIN_API_TOKEN_HASH=$hash` and `ADMIN_API_TOKEN_PEPPER=$pepper`
+
+## Security Controls
+- Route-level rate limiting is enabled:
+	- `/admin/*` via `ADMIN_RATE_LIMIT_WINDOW_MS` and `ADMIN_RATE_LIMIT_MAX`
+	- `/webhook/*` via `WEBHOOK_RATE_LIMIT_WINDOW_MS` and `WEBHOOK_RATE_LIMIT_MAX`
+- Admin security events are audit-logged to stdout and persisted in Postgres table `admin_audit_logs`
+
+## Observability
+- In-memory request telemetry tracks:
+	- total requests and error count
+	- error rate, avg latency, p95 latency
+	- recent request list (method, path, status, duration)
+- Data is exposed to admins at `GET /admin/observability` and rendered in the admin dashboard.
+
+## CI
+- GitHub Actions workflow: `.github/workflows/ci.yml`
+- On push and pull request, CI:
+	- bootstraps local `.secrets` values for the runner
+	- runs `docker compose up -d --build`
+	- smoke-checks `/health`, `/admin/`, and admin auth behavior (`401` without token, `200` with token)
+	- validates `/admin/auth/check`, `/admin/observability`, and `/admin/audit-logs` (including filter query)
+	- tears down containers with `docker compose down -v`
 
 ## Retention
 - Default retention: `30` days
@@ -80,3 +107,12 @@
 
 ## Sprint Summary
 - Sprint recap and status are tracked in `docs/sprint_summary.md`.
+
+## Deployment
+- Environment templates:
+	- `.env.staging.example`
+	- `.env.production.example`
+- Deployment and rollback runbook:
+	- `docs/deployment_runbook.md`
+- Staging helper script:
+	- `./scripts/deploy_staging.ps1 -UseStagingTemplate -AdminToken "<admin-token>"`
