@@ -14,9 +14,6 @@ services:
       OPENAI_API_KEY: ${OPENAI_API_KEY:-}
     env_file:
       - .env
-    volumes:
-      - .:/app
-      - /app/node_modules
     depends_on:
       - postgres
       - redis

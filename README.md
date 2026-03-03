@@ -10,6 +10,12 @@
 - Postgres: `localhost:5432`
 - Redis: `localhost:6379`
 
+## Useful Endpoints
+- `GET /health`
+- `GET /summary/:summaryId`
+- `GET /webhook/events?idempotencyKey=<repo#pr#merge_sha>`
+- `GET /webhook/dead-letters?limit=20`
+
 ## Notes
 - Docker Compose file is at repo root: `docker-compose.yml`
 - API Dockerfile is at `docker/Dockerfile`

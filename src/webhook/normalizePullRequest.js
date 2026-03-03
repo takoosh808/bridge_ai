@@ -34,7 +34,7 @@ function normalizePullRequest({ deliveryId, repoFullName, pullRequest, files }) 
     repo: repoFullName,
     pr_number: pullRequest.number,
     pr_url: pullRequest.html_url,
-    merged_at: pullRequest.merged_at,
+    merged_at: pullRequest.merged_at || new Date().toISOString(),
     commit_range: {
       from: pullRequest.base?.sha || null,
       to: pullRequest.merge_commit_sha || pullRequest.head?.sha || null
