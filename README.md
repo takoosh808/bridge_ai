@@ -1,5 +1,5 @@
 # Bridge AI (Docker Workflow)
-
+### Description of project and reflection in project_reflection.md
 ## Project Overview
 Bridge AI is a webhook-driven backend service that turns merged GitHub pull requests into business-friendly summaries for non-engineering stakeholders.
 
