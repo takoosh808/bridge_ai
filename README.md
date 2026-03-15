@@ -1,5 +1,25 @@
 # Bridge AI (Docker Workflow)
 
+## Project Overview
+Bridge AI is a webhook-driven backend service that turns merged GitHub pull requests into business-friendly summaries for non-engineering stakeholders.
+
+### What It Does
+- Receives and verifies GitHub webhook events.
+- Processes merged PR data and normalizes technical changes.
+- Generates structured summaries and stores them in Postgres.
+- Exposes admin APIs and a dashboard for operations, observability, and retention.
+
+### Core Stack
+- API: Node.js + Express
+- Data: PostgreSQL
+- Runtime support: Redis
+- Delivery: Docker Compose + GitHub Actions CI
+
+### Current Status
+- Local end-to-end workflow is running and testable.
+- Security controls include admin token auth, rate limiting, and audit logs.
+- Admin dashboard includes overview metrics, observability, and audit log filters.
+
 ## Run (from repo root)
 - Start: `docker compose up --build`
 - Stop and remove data: `docker compose down -v`
