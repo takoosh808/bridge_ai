@@ -10,13 +10,19 @@ services:
       DATABASE_URL: postgresql://bridge:bridge@postgres:5432/bridge
       REDIS_URL: redis://redis:6379
       WEBHOOK_SECRET: ${WEBHOOK_SECRET:-}
+      WEBHOOK_SECRET_FILE: ${WEBHOOK_SECRET_FILE:-/run/secrets/webhook_secret}
       GITHUB_TOKEN: ${GITHUB_TOKEN:-}
+      GITHUB_TOKEN_FILE: ${GITHUB_TOKEN_FILE:-/run/secrets/github_token}
       OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+      OPENAI_API_KEY_FILE: ${OPENAI_API_KEY_FILE:-/run/secrets/openai_api_key}
+      ADMIN_API_TOKEN_HASH: ${ADMIN_API_TOKEN_HASH:-}
+      ADMIN_API_TOKEN_HASH_FILE: ${ADMIN_API_TOKEN_HASH_FILE:-/run/secrets/admin_api_token_hash}
+      ADMIN_API_TOKEN_PEPPER: ${ADMIN_API_TOKEN_PEPPER:-}
+      ADMIN_API_TOKEN_PEPPER_FILE: ${ADMIN_API_TOKEN_PEPPER_FILE:-/run/secrets/admin_api_token_pepper}
     env_file:
       - .env
     volumes:
-      - .:/app
-      - /app/node_modules
+      - ./.secrets:/run/secrets:ro
     depends_on:
       - postgres
       - redis

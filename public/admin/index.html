@@ -1,0 +1,483 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Bridge Admin Dashboard</title>
+    <style>
+      body {
+        margin: 0;
+        padding: 24px;
+        font-family: Arial, sans-serif;
+        background: #f7f7f8;
+      }
+
+      h1 {
+        margin: 0 0 12px;
+      }
+
+      .row {
+        display: grid;
+        grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+        gap: 12px;
+        margin-bottom: 16px;
+      }
+
+      .card {
+        background: #fff;
+        border: 1px solid #ddd;
+        border-radius: 8px;
+        padding: 12px;
+      }
+
+      .label {
+        color: #555;
+        font-size: 12px;
+        text-transform: uppercase;
+        margin-bottom: 8px;
+      }
+
+      .value {
+        font-size: 24px;
+        font-weight: 700;
+      }
+
+      button {
+        border: 1px solid #333;
+        background: #fff;
+        border-radius: 6px;
+        padding: 8px 12px;
+        cursor: pointer;
+      }
+
+      table {
+        width: 100%;
+        border-collapse: collapse;
+      }
+
+      th,
+      td {
+        border-bottom: 1px solid #eee;
+        text-align: left;
+        padding: 8px;
+        font-size: 13px;
+      }
+
+      .muted {
+        color: #666;
+      }
+
+      #status {
+        margin-left: 10px;
+      }
+    </style>
+  </head>
+  <body>
+    <h1>Bridge Admin</h1>
+    <div class="muted">Operational overview for summaries, webhook processing, dead letters, and retention.</div>
+
+    <div style="margin: 14px 0">
+      <input id="tokenInput" type="password" placeholder="Admin token" style="padding: 8px; border: 1px solid #ccc; border-radius: 6px; min-width: 240px" />
+      <label class="muted" style="margin-left: 6px; font-size: 12px"><input id="rememberTokenCheckbox" type="checkbox" /> Remember in this tab</label>
+      <button id="authBtn">Check Auth</button>
+      <button id="refreshBtn">Refresh</button>
+      <button id="retentionBtn">Run retention cleanup</button>
+      <button id="signOutBtn">Sign Out</button>
+      <span id="status" class="muted"></span>
+    </div>
+
+    <div style="margin: 0 0 14px" class="muted">
+      <strong>Auth:</strong> <span id="authState">Not checked</span>
+    </div>
+
+    <div class="row">
+      <div class="card">
+        <div class="label">Summaries</div>
+        <div id="summariesCount" class="value">-</div>
+      </div>
+      <div class="card">
+        <div class="label">Processed Webhooks</div>
+        <div id="webhooksCount" class="value">-</div>
+      </div>
+      <div class="card">
+        <div class="label">Dead Letters</div>
+        <div id="deadLettersCount" class="value">-</div>
+      </div>
+    </div>
+
+    <div class="card" style="margin-bottom: 16px">
+      <div class="label">Last Activity</div>
+      <div id="lastActivity" class="muted">-</div>
+    </div>
+
+    <div class="card" style="margin-bottom: 16px">
+      <div class="label">Recent Dead Letters</div>
+      <table>
+        <thead>
+          <tr>
+            <th>When</th>
+            <th>Code</th>
+            <th>Repo</th>
+            <th>PR</th>
+            <th>Retryable</th>
+          </tr>
+        </thead>
+        <tbody id="deadLettersTableBody"></tbody>
+      </table>
+    </div>
+
+    <div class="card">
+      <div class="label">Recent Webhook Events</div>
+      <table>
+        <thead>
+          <tr>
+            <th>When</th>
+            <th>Repo</th>
+            <th>PR</th>
+            <th>Idempotency Key</th>
+            <th>Summary</th>
+          </tr>
+        </thead>
+        <tbody id="webhooksTableBody"></tbody>
+      </table>
+    </div>
+
+    <div class="card" style="margin-top: 16px">
+      <div class="label">Observability</div>
+      <div id="observabilitySummary" class="muted" style="margin-bottom: 10px">-</div>
+      <table>
+        <thead>
+          <tr>
+            <th>When</th>
+            <th>Method</th>
+            <th>Path</th>
+            <th>Status</th>
+            <th>Latency (ms)</th>
+          </tr>
+        </thead>
+        <tbody id="observabilityTableBody"></tbody>
+      </table>
+    </div>
+
+    <div class="card" style="margin-top: 16px">
+      <div class="label">Admin Audit Logs</div>
+      <div style="margin-bottom: 10px" class="muted">
+        <label style="margin-right: 10px">
+          Action:
+          <select id="auditActionFilter">
+            <option value="">All</option>
+            <option value="admin_auth">admin_auth</option>
+            <option value="admin_auth_check">admin_auth_check</option>
+            <option value="admin_retention_run">admin_retention_run</option>
+          </select>
+        </label>
+        <label>
+          Outcome:
+          <select id="auditOutcomeFilter">
+            <option value="">All</option>
+            <option value="allowed">allowed</option>
+            <option value="denied">denied</option>
+            <option value="success">success</option>
+            <option value="failure">failure</option>
+            <option value="attempt">attempt</option>
+            <option value="misconfigured">misconfigured</option>
+          </select>
+        </label>
+        <button id="auditClearFiltersBtn" style="margin-left: 10px">Clear filters</button>
+      </div>
+      <table>
+        <thead>
+          <tr>
+            <th>When</th>
+            <th>Action</th>
+            <th>Outcome</th>
+            <th>Method</th>
+            <th>Path</th>
+            <th>IP</th>
+          </tr>
+        </thead>
+        <tbody id="auditLogsTableBody"></tbody>
+      </table>
+    </div>
+
+    <script>
+      const summariesCount = document.getElementById('summariesCount');
+      const webhooksCount = document.getElementById('webhooksCount');
+      const deadLettersCount = document.getElementById('deadLettersCount');
+      const lastActivity = document.getElementById('lastActivity');
+      const deadLettersTableBody = document.getElementById('deadLettersTableBody');
+      const webhooksTableBody = document.getElementById('webhooksTableBody');
+      const refreshBtn = document.getElementById('refreshBtn');
+      const retentionBtn = document.getElementById('retentionBtn');
+      const statusEl = document.getElementById('status');
+      const tokenInput = document.getElementById('tokenInput');
+      const rememberTokenCheckbox = document.getElementById('rememberTokenCheckbox');
+      const authBtn = document.getElementById('authBtn');
+      const signOutBtn = document.getElementById('signOutBtn');
+      const authState = document.getElementById('authState');
+      const observabilitySummary = document.getElementById('observabilitySummary');
+      const observabilityTableBody = document.getElementById('observabilityTableBody');
+      const auditLogsTableBody = document.getElementById('auditLogsTableBody');
+      const auditActionFilter = document.getElementById('auditActionFilter');
+      const auditOutcomeFilter = document.getElementById('auditOutcomeFilter');
+      const auditClearFiltersBtn = document.getElementById('auditClearFiltersBtn');
+      const sessionTokenKey = 'bridge_admin_token';
+
+      function getAuthHeaders() {
+        const token = tokenInput.value;
+        if (!token) {
+          return null;
+        }
+
+        return { 'x-admin-token': token };
+      }
+
+      function loadSessionToken() {
+        const token = sessionStorage.getItem(sessionTokenKey) || '';
+        if (token) {
+          tokenInput.value = token;
+          rememberTokenCheckbox.checked = true;
+        }
+      }
+
+      function syncSessionToken() {
+        if (rememberTokenCheckbox.checked && tokenInput.value) {
+          sessionStorage.setItem(sessionTokenKey, tokenInput.value);
+          return;
+        }
+
+        sessionStorage.removeItem(sessionTokenKey);
+      }
+
+      function clearAuthState() {
+        tokenInput.value = '';
+        rememberTokenCheckbox.checked = false;
+        sessionStorage.removeItem(sessionTokenKey);
+        authState.textContent = 'Signed out';
+        statusEl.textContent = 'Token cleared for this tab.';
+      }
+
+      function clearAuditFilters() {
+        auditActionFilter.value = '';
+        auditOutcomeFilter.value = '';
+        loadOverview();
+      }
+
+      async function checkAuth() {
+        const headers = getAuthHeaders();
+        if (!headers) {
+          authState.textContent = 'Missing token';
+          statusEl.textContent = 'Enter admin token first.';
+          return false;
+        }
+
+        try {
+          const response = await fetch('/admin/auth/check', { headers });
+
+          if (response.ok) {
+            authState.textContent = 'OK';
+            statusEl.textContent = 'Token accepted.';
+            syncSessionToken();
+            return true;
+          }
+
+          authState.textContent = `Failed (${response.status})`;
+          statusEl.textContent = 'Invalid token or admin auth not configured.';
+          return false;
+        } catch (error) {
+          authState.textContent = 'Failed (network)';
+          statusEl.textContent = error.message;
+          return false;
+        }
+      }
+
+      function fmtDate(value) {
+        if (!value) return '-';
+        const dt = new Date(value);
+        if (Number.isNaN(dt.getTime())) return value;
+        return dt.toLocaleString();
+      }
+
+      async function loadOverview() {
+        const headers = getAuthHeaders();
+        if (!headers) {
+          authState.textContent = 'Missing token';
+          statusEl.textContent = 'Enter admin token first.';
+          return;
+        }
+
+        statusEl.textContent = 'Loading...';
+
+        try {
+          const auditParams = new URLSearchParams({ limit: '10' });
+          if (auditActionFilter.value) {
+            auditParams.set('action', auditActionFilter.value);
+          }
+
+          if (auditOutcomeFilter.value) {
+            auditParams.set('outcome', auditOutcomeFilter.value);
+          }
+
+          const [overviewRes, recentRes, observabilityRes, auditLogsRes] = await Promise.all([
+            fetch('/admin/overview', { headers }),
+            fetch('/admin/recent-webhooks?limit=10', { headers }),
+            fetch('/admin/observability', { headers }),
+            fetch(`/admin/audit-logs?${auditParams.toString()}`, { headers })
+          ]);
+
+          if (overviewRes.status === 401 || recentRes.status === 401) {
+            authState.textContent = 'Failed (401)';
+          } else {
+            authState.textContent = 'OK';
+          }
+
+          if (!overviewRes.ok) {
+            throw new Error('Failed to fetch /admin/overview');
+          }
+
+          if (!recentRes.ok) {
+            throw new Error('Failed to fetch /admin/recent-webhooks');
+          }
+
+          if (!observabilityRes.ok) {
+            throw new Error('Failed to fetch /admin/observability');
+          }
+
+          if (!auditLogsRes.ok) {
+            throw new Error('Failed to fetch /admin/audit-logs');
+          }
+
+          const overview = await overviewRes.json();
+          const recent = await recentRes.json();
+          const observability = await observabilityRes.json();
+          const auditLogs = await auditLogsRes.json();
+
+          summariesCount.textContent = overview.totals?.summaries ?? '-';
+          webhooksCount.textContent = overview.totals?.processed_webhooks ?? '-';
+          deadLettersCount.textContent = overview.totals?.dead_letters ?? '-';
+
+          lastActivity.innerHTML = [
+            `Last summary: ${fmtDate(overview.last_activity?.summary_at)}`,
+            `Last webhook: ${fmtDate(overview.last_activity?.webhook_at)}`,
+            `Last dead letter: ${fmtDate(overview.last_activity?.dead_letter_at)}`
+          ].join('<br>');
+
+          const deadLetters = overview.recent_dead_letters || [];
+          deadLettersTableBody.innerHTML = deadLetters
+            .map((item) => `
+              <tr>
+                <td>${fmtDate(item.created_at)}</td>
+                <td>${item.error_code || '-'}</td>
+                <td>${item.repo || '-'}</td>
+                <td>${item.pr_number || '-'}</td>
+                <td>${item.retryable ? 'yes' : 'no'}</td>
+              </tr>
+            `)
+            .join('') || '<tr><td colspan="5" class="muted">No dead letters</td></tr>';
+
+          const webhooks = recent.items || [];
+          webhooksTableBody.innerHTML = webhooks
+            .map((item) => `
+              <tr>
+                <td>${fmtDate(item.created_at)}</td>
+                <td>${item.repo || '-'}</td>
+                <td>${item.pr_number || '-'}</td>
+                <td>${item.idempotency_key || '-'}</td>
+                <td>${item.summary_id || '-'}</td>
+              </tr>
+            `)
+            .join('') || '<tr><td colspan="5" class="muted">No webhook events</td></tr>';
+
+          observabilitySummary.textContent = `Requests=${observability.totals?.requests ?? 0}, Errors=${observability.totals?.errors ?? 0}, ErrorRate=${observability.totals?.error_rate_percent ?? 0}%, AvgLatency=${observability.totals?.avg_latency_ms ?? 0}ms, P95=${observability.totals?.p95_latency_ms ?? 0}ms`;
+
+          const recentRequests = observability.recent_requests || [];
+          observabilityTableBody.innerHTML = recentRequests
+            .slice(-10)
+            .reverse()
+            .map((item) => `
+              <tr>
+                <td>${fmtDate(item.ts)}</td>
+                <td>${item.method || '-'}</td>
+                <td>${item.path || '-'}</td>
+                <td>${item.status_code ?? '-'}</td>
+                <td>${item.duration_ms ?? '-'}</td>
+              </tr>
+            `)
+            .join('') || '<tr><td colspan="5" class="muted">No recent requests</td></tr>';
+
+          const auditItems = auditLogs.items || [];
+          auditLogsTableBody.innerHTML = auditItems
+            .map((item) => `
+              <tr>
+                <td>${fmtDate(item.created_at)}</td>
+                <td>${item.action || '-'}</td>
+                <td>${item.outcome || '-'}</td>
+                <td>${item.method || '-'}</td>
+                <td>${item.path || '-'}</td>
+                <td>${item.client_ip || '-'}</td>
+              </tr>
+            `)
+            .join('') || '<tr><td colspan="6" class="muted">No audit logs</td></tr>';
+
+          statusEl.textContent = `Updated ${new Date().toLocaleTimeString()}`;
+        } catch (error) {
+          statusEl.textContent = error.message;
+        }
+      }
+
+      async function runRetention() {
+        const headers = getAuthHeaders();
+        if (!headers) {
+          authState.textContent = 'Missing token';
+          statusEl.textContent = 'Enter admin token first.';
+          return;
+        }
+
+        statusEl.textContent = 'Running retention cleanup...';
+
+        try {
+          const response = await fetch('/admin/retention/run', {
+            method: 'POST',
+            headers
+          });
+          if (!response.ok) {
+            if (response.status === 401) {
+              authState.textContent = 'Failed (401)';
+            }
+            throw new Error('Retention cleanup failed');
+          }
+
+          authState.textContent = 'OK';
+
+          const result = await response.json();
+          statusEl.textContent = `Retention complete. Removed summaries=${result.deleted?.summaries || 0}, events=${result.deleted?.webhook_events || 0}, dead_letters=${result.deleted?.dead_letter_events || 0}`;
+          await loadOverview();
+        } catch (error) {
+          statusEl.textContent = error.message;
+        }
+      }
+
+      refreshBtn.addEventListener('click', loadOverview);
+      retentionBtn.addEventListener('click', runRetention);
+      authBtn.addEventListener('click', checkAuth);
+      signOutBtn.addEventListener('click', clearAuthState);
+      auditActionFilter.addEventListener('change', loadOverview);
+      auditOutcomeFilter.addEventListener('change', loadOverview);
+      auditClearFiltersBtn.addEventListener('click', clearAuditFilters);
+      rememberTokenCheckbox.addEventListener('change', syncSessionToken);
+      tokenInput.addEventListener('input', syncSessionToken);
+      tokenInput.addEventListener('keydown', (event) => {
+        if (event.key === 'Enter') {
+          event.preventDefault();
+          checkAuth().then((ok) => {
+            if (ok) {
+              loadOverview();
+            }
+          });
+        }
+      });
+
+      loadSessionToken();
+    </script>
+  </body>
+</html>

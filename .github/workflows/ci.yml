@@ -1,0 +1,72 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  docker-smoke:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Bootstrap local secrets for CI
+        shell: pwsh
+        run: |
+          ./scripts/setup_secrets.ps1 -Force -WebhookSecret "ci_webhook_secret" -AdminToken "ci-admin-token" -AdminPepper "ci-admin-pepper" -GithubToken "" -OpenAiApiKey ""
+
+      - name: Build and start docker services
+        run: docker compose up -d --build
+
+      - name: Wait for health endpoint
+        shell: bash
+        run: |
+          for i in {1..40}; do
+            code=$(curl -s -o /dev/null -w "%{http_code}" http://localhost:8000/health || true)
+            if [ "$code" = "200" ]; then
+              echo "health is ready"
+              exit 0
+            fi
+            sleep 2
+          done
+          echo "health endpoint did not become ready in time"
+          docker compose logs --no-color
+          exit 1
+
+      - name: Smoke test core endpoints
+        shell: bash
+        run: |
+          health_code=$(curl -s -o /dev/null -w "%{http_code}" http://localhost:8000/health)
+          [ "$health_code" = "200" ]
+
+          admin_page_code=$(curl -s -o /dev/null -w "%{http_code}" http://localhost:8000/admin/)
+          [ "$admin_page_code" = "200" ]
+
+          unauthorized_code=$(curl -s -o /dev/null -w "%{http_code}" http://localhost:8000/admin/overview)
+          [ "$unauthorized_code" = "401" ]
+
+          authorized_code=$(curl -s -o /dev/null -w "%{http_code}" -H "x-admin-token: ci-admin-token" http://localhost:8000/admin/overview)
+          [ "$authorized_code" = "200" ]
+
+          auth_check_code=$(curl -s -o /dev/null -w "%{http_code}" -H "x-admin-token: ci-admin-token" http://localhost:8000/admin/auth/check)
+          [ "$auth_check_code" = "200" ]
+
+          observability_code=$(curl -s -o /dev/null -w "%{http_code}" -H "x-admin-token: ci-admin-token" http://localhost:8000/admin/observability)
+          [ "$observability_code" = "200" ]
+
+          audit_logs_code=$(curl -s -o /dev/null -w "%{http_code}" -H "x-admin-token: ci-admin-token" "http://localhost:8000/admin/audit-logs?limit=5")
+          [ "$audit_logs_code" = "200" ]
+
+          audit_filter_code=$(curl -s -o /dev/null -w "%{http_code}" -H "x-admin-token: ci-admin-token" "http://localhost:8000/admin/audit-logs?limit=5&action=admin_auth")
+          [ "$audit_filter_code" = "200" ]
+
+          denied_json=$(curl -s -H "x-admin-token: ci-admin-token" "http://localhost:8000/admin/audit-logs?limit=20&outcome=denied")
+          denied_count=$(printf '%s' "$denied_json" | python3 -c "import sys, json; print(json.load(sys.stdin).get('count', 0))")
+          [ "$denied_count" -gt 0 ]
+
+      - name: Stop services
+        if: always()
+        run: docker compose down -v
