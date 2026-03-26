@@ -103,5 +103,6 @@ async function query(text, params = []) {
 
 module.exports = {
   initDatabase,
-  query
+  query,
+  pool
 };

@@ -20,6 +20,70 @@ Bridge AI is a webhook-driven backend service that turns merged GitHub pull requ
 - Security controls include admin token auth, rate limiting, and audit logs.
 - Admin dashboard includes overview metrics, observability, and audit log filters.
 
+## Installation
+
+### Prerequisites
+- **Node.js**: v20+ (required for scripts; Docker image uses Node 20 Alpine)
+- **Docker & Docker Compose**: Latest stable versions
+- **Available Ports**: `8000` (API), `5432` (PostgreSQL), `6379` (Redis), `5555` (adminer, optional)
+- **GitHub Token** (optional): For webhook processing; set `GITHUB_TOKEN` to enable upstream PR data enrichment
+
+### Environment Setup
+Before launching, configure your `.env` file:
+
+1. **Copy the example template**:
+   ```powershell
+   Copy-Item .env.example .env
+   ```
+
+2. **Edit `.env` for your environment**:
+   - `ADMIN_TOKEN`: Set a secure random string (e.g., 32+ chars); used to authenticate dashboard and admin APIs
+   - `GITHUB_WEBHOOK_SECRET`: Set to match your GitHub webhook secret (press "Regenerate" in GitHub repo settings → Webhooks)
+   - `DATA_RETENTION_DAYS`: Default `30`; adjust for your retention policy
+   - `RETENTION_CLEANUP_INTERVAL_MINUTES`: Default `360` (6 hours); cleanup frequency
+   - `GITHUB_TOKEN` (optional): If set, enriches summaries with PR author and approver data
+
+3. **Generate initial secrets** (populates derived values):
+   ```powershell
+   ./scripts/setup_secrets.ps1 -Force
+   ```
+   This creates a `.secrets` file with bootstrapped values; **save the printed admin token** for dashboard access.
+
+## Launch
+
+### Start the Stack
+From the repo root:
+```powershell
+docker compose up --build
+```
+
+**Expected output** (watch for these confirmations):
+```
+bridge-api-1        | Server running on port 8000
+bridge-postgres-1   | database system is ready to accept connections
+bridge-redis-1      | Ready to accept connections
+```
+
+Once all three services show ready status, the API is running.
+
+### Health Check
+Verify the API is responding:
+```powershell
+Invoke-WebRequest -UseBasicParsing http://localhost:8000/health
+```
+Expected: `200 OK` with JSON body.
+
+### Access the Dashboard
+1. Open `http://localhost:8000/admin/` in your browser
+2. Paste the admin token from `setup_secrets.ps1` output
+3. Click `Check Auth` → `Refresh` to load metrics
+
+### Stop the Stack
+```powershell
+docker compose down        # Keeps data
+docker compose down -v     # Removes data & volumes
+```
+
 ## Run (from repo root)
 - Start: `docker compose up --build`
 - Stop and remove data: `docker compose down -v`

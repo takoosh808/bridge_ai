@@ -7,6 +7,7 @@ const { getSecret } = require('./config/secrets');
 const { createRateLimiter } = require('./security/rateLimit');
 const { logAdminAudit, listAdminAuditLogs } = require('./security/audit');
 const { recordRequest, getObservabilitySnapshot } = require('./observability/metrics');
+const { getHealthStatus } = require('./observability/health');
 const {
   getSummary,
   getProcessedEvent,
@@ -283,6 +284,39 @@ app.get('/admin/observability', requireAdminToken, async (req, res) => {
       error: {
         code: 'ADMIN_OBSERVABILITY_FAILED',
         message: 'Failed to load observability metrics',
+        retryable: true,
+        details: error.message
+      }
+    });
+  }
+});
+
+app.get('/admin/health', requireAdminToken, async (req, res) => {
+  try {
+    const health = await getHealthStatus();
+    
+    logAdminAudit(req, {
+      action: 'admin_health_check',
+      outcome: 'success',
+      details: {
+        status: health.status
+      }
+    });
+    
+    return res.json(health);
+  } catch (error) {
+    logAdminAudit(req, {
+      action: 'admin_health_check',
+      outcome: 'failure',
+      details: {
+        message: error.message
+      }
+    });
+    
+    return res.status(500).json({
+      error: {
+        code: 'ADMIN_HEALTH_CHECK_FAILED',
+        message: 'Failed to check system health',
         retryable: true,
         details: error.message
       }
